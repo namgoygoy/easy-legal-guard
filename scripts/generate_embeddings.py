@@ -3,9 +3,15 @@
 standard_clauses.jsonl → Gemini Embedding → D1 SQL + Vectorize NDJSON
 
 사용법:
-  export GEMINI_API_KEY="AIzaSyDjt1v0zNaNspE7TX-y5npj2kFpwl3dORw"
+  export GEMINI_API_KEY=""
   pip install -r scripts/requirements.txt
   python scripts/generate_embeddings.py
+
+  # MVP 소코퍼스 (≈2,500건)
+  python scripts/create_small_corpus.py
+  python scripts/generate_embeddings.py \\
+    --input data/processed/standard_clauses_small.jsonl \\
+    --output data/processed/upload_small
 
   # 테스트 (10건만)
   python scripts/generate_embeddings.py --limit 10
@@ -25,8 +31,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -36,10 +40,15 @@ DEFAULT_INPUT = ROOT / "data" / "processed" / "standard_clauses.jsonl"
 DEFAULT_OUTPUT = ROOT / "data" / "processed" / "upload"
 MIGRATION = Path(__file__).resolve().parent / "migrations" / "001_standard_clauses.sql"
 
-EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_MODEL = "gemini-embedding-2"
+# gemini-embedding-2 기본 출력은 3072차원. Vectorize contract-index(768)와 맞추려면 아래 값 유지.
 EMBEDDING_DIM = 768
+OUTPUT_DIMENSIONALITY = 768
+# gemini-embedding-2는 contents에 str[]를 넘기면 벡터 1개만 반환하는 경우가 있어 건별 호출 권장
+EMBED_ONE_REQUEST_PER_TEXT = True
 BATCH_SIZE = 100
-ROWS_PER_SQL_FILE = 500
+# D1 SQLITE_TOOBIG 방지: 파일당 개별 INSERT 문 개수 (조항 본문이 길어 500행 bulk INSERT 불가)
+ROWS_PER_SQL_FILE = 15
 ROWS_PER_NDJSON_FILE = 500
 
 
@@ -135,13 +144,16 @@ class BatchWriter:
         if not self._sql_buffer:
             return
         path = self.inserts_dir / f"inserts_{self._sql_file_idx:04d}.sql"
-        header = (
-            "INSERT INTO standard_clauses "
+        cols = (
             "(id, contract_type, main_category, sub_category, detail_category, "
             "article_no, labels, content, service_type_id, service_type_label, "
-            "document_name, source_zip, source_file, split) VALUES\n"
+            "document_name, source_zip, source_file, split)"
         )
-        path.write_text(header + ",\n".join(self._sql_buffer) + ";\n", encoding="utf-8")
+        statements = [
+            f"INSERT INTO standard_clauses {cols} VALUES {values};"
+            for values in self._sql_buffer
+        ]
+        path.write_text("\n".join(statements) + "\n", encoding="utf-8")
         self.sql_files.append(path)
         self._sql_buffer = []
         self._sql_file_idx += 1
@@ -181,6 +193,90 @@ def load_checkpoint(path: Path) -> set[str]:
     return set(data.get("completed_ids") or [])
 
 
+def load_api_key() -> str | None:
+    key = os.environ.get("GEMINI_API_KEY")
+    if key:
+        return key.strip()
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("GEMINI_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _embed_config() -> dict[str, Any]:
+    cfg: dict[str, Any] = {"task_type": "RETRIEVAL_DOCUMENT"}
+    if OUTPUT_DIMENSIONALITY is not None:
+        cfg["output_dimensionality"] = OUTPUT_DIMENSIONALITY
+    return cfg
+
+
+def _validate_vector(vec: list[float]) -> list[float]:
+    if len(vec) != EMBEDDING_DIM:
+        raise ValueError(
+            f"차원 불일치: {len(vec)} (예상 {EMBEDDING_DIM}). "
+            "Vectorize 인덱스 dimensions를 확인하세요."
+        )
+    return vec
+
+
+def embed_one(client: Any, text: str) -> list[float]:
+    result = client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=text,
+        config=_embed_config(),
+    )
+    if not result.embeddings:
+        raise ValueError("embeddings 필드가 비어 있습니다.")
+    return _validate_vector(list(result.embeddings[0].values))
+
+
+def embed_batch(client: Any, texts: list[str], retries: int = 3) -> list[list[float]]:
+    """텍스트 목록 → 임베딩 벡터 목록 (gemini-embedding-2는 건별 호출)."""
+    if not texts:
+        return []
+
+    if not EMBED_ONE_REQUEST_PER_TEXT:
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                result = client.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=texts,
+                    config=_embed_config(),
+                )
+                if not result.embeddings:
+                    raise ValueError("embeddings 필드가 비어 있습니다.")
+                embeddings = [list(e.values) for e in result.embeddings]
+                if len(embeddings) != len(texts):
+                    raise ValueError(f"임베딩 수({len(embeddings)}) ≠ 텍스트 수({len(texts)})")
+                return [_validate_vector(v) for v in embeddings]
+            except Exception as e:
+                last_err = e
+                time.sleep(2**attempt)
+        raise RuntimeError(f"임베딩 배치 실패: {last_err}") from last_err
+
+    embeddings: list[list[float]] = []
+    for text in texts:
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                embeddings.append(embed_one(client, text))
+                break
+            except Exception as e:
+                last_err = e
+                wait = 2**attempt
+                print(f"  ⚠️ 임베딩 재시도 {attempt + 1}/{retries} ({wait}s): {e}")
+                time.sleep(wait)
+        else:
+            raise RuntimeError(f"임베딩 실패: {last_err}") from last_err
+    return embeddings
+
+
 def save_checkpoint(path: Path, completed: set[str], stats: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -193,47 +289,17 @@ def save_checkpoint(path: Path, completed: set[str], stats: dict[str, Any]) -> N
 
 def configure_gemini(api_key: str) -> Any:
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError as e:
         raise SystemExit(
-            "google-generativeai 패키지가 필요합니다.\n"
+            "google-genai 패키지가 필요합니다.\n"
             "  pip install -r scripts/requirements.txt"
         ) from e
 
-    genai.configure(api_key=api_key)
-    return genai
-
-
-def embed_batch(genai: Any, texts: list[str], retries: int = 3) -> list[list[float]]:
-    last_err: Exception | None = None
-    for attempt in range(retries):
-        try:
-            result = genai.embed_content(
-                model=EMBEDDING_MODEL,
-                content=texts,
-                task_type="retrieval_document",
-            )
-            embeddings = result.get("embedding")
-            if embeddings is None:
-                raise ValueError("embedding 필드가 비어 있습니다.")
-            # 단일 텍스트면 1차원, 배치면 2차원
-            if texts and isinstance(embeddings[0], (int, float)):
-                embeddings = [embeddings]
-            if len(embeddings) != len(texts):
-                raise ValueError(f"임베딩 수({len(embeddings)}) ≠ 텍스트 수({len(texts)})")
-            for vec in embeddings:
-                if len(vec) != EMBEDDING_DIM:
-                    raise ValueError(
-                        f"차원 불일치: {len(vec)} (예상 {EMBEDDING_DIM}). "
-                        "Vectorize 인덱스 dimensions를 확인하세요."
-                    )
-            return embeddings
-        except Exception as e:
-            last_err = e
-            wait = 2 ** attempt
-            print(f"  ⚠️ 임베딩 재시도 {attempt + 1}/{retries} ({wait}s): {e}")
-            time.sleep(wait)
-    raise RuntimeError(f"임베딩 배치 실패: {last_err}") from last_err
+    return genai.Client(
+        api_key=api_key,
+        http_options={"api_version": "v1beta"},
+    )
 
 
 def iter_jsonl(path: Path, limit: int | None) -> list[dict[str, Any]]:
@@ -269,9 +335,12 @@ wrangler d1 execute contract-db --remote --file=data/processed/upload/001_standa
 
 ## 2. D1 데이터 INSERT
 
+조항 본문이 길어 **파일당 15행** 단위 INSERT입니다. `SQLITE_TOOBIG` 시 `generate_d1_inserts.py`로 SQL만 재생성하세요.
+
 ```bash
-for f in data/processed/upload/inserts/inserts_*.sql; do
-  echo "Executing $f ..."
+bash scripts/upload_to_cloudflare.sh data/processed/upload_small
+# 또는
+for f in data/processed/upload_small/inserts/inserts_*.sql; do
   wrangler d1 execute contract-db --remote --file="$f"
 done
 ```
@@ -312,18 +381,18 @@ def main() -> None:
     parser.add_argument("--api-key", type=str, default=None, help="기본: GEMINI_API_KEY 환경변수")
     args = parser.parse_args()
 
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY")
+    api_key = args.api_key or load_api_key()
     if not api_key and not args.dry_run:
         raise SystemExit(
             "GEMINI_API_KEY가 필요합니다.\n"
-            "  export GEMINI_API_KEY='...'\n"
+            "  export GEMINI_API_KEY='...'  또는 .env에 설정\n"
             "  또는 --api-key 옵션 / --dry-run"
         )
 
     if not args.input.exists():
         raise SystemExit(f"입력 파일 없음: {args.input}\n먼저 preprocess_aihub.py를 실행하세요.")
 
-    genai = configure_gemini(api_key) if not args.dry_run else None
+    client = configure_gemini(api_key) if not args.dry_run else None
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
     copy_migration(output_dir)
@@ -366,7 +435,7 @@ def main() -> None:
                 vectors = [[0.0] * EMBEDDING_DIM for _ in batch_items]
             else:
                 texts = [embedding_text(it) for _, it in batch_items]
-                vectors = embed_batch(genai, texts)
+                vectors = embed_batch(client, texts)
             for (rid, it), vec in zip(batch_items, vectors):
                 writer.add(rid, it, vec)
                 completed.add(rid)
@@ -390,7 +459,7 @@ def main() -> None:
                 vectors = [[0.0] * EMBEDDING_DIM for _ in batch_items]
             else:
                 texts = [embedding_text(it) for _, it in batch_items]
-                vectors = embed_batch(genai, texts)
+                vectors = embed_batch(client, texts)
             for (rid, it), vec in zip(batch_items, vectors):
                 writer.add(rid, it, vec)
                 completed.add(rid)
@@ -421,12 +490,16 @@ def main() -> None:
     )
     write_upload_readme(output_dir, stats)
 
+    if stats["embedded_rows"] == 0 and errors:
+        print(f"\n❌ 임베딩 실패 — 생성된 파일 없음 ({elapsed:.1f}s)")
+        print(f"   오류 {len(errors)}건 → {stats_path}")
+        raise SystemExit(1)
+
     print(f"\n✅ 생성 완료 ({elapsed:.1f}s)")
-    print(f"   SQL 파일: {len(writer.sql_files)}개 → {output_dir / 'inserts'}")
-    print(f"   Vector NDJSON: {len(writer.vec_files)}개 → {output_dir / 'vectors'}")
+    print(f"   임베딩 {stats['embedded_rows']}행 · SQL {len(writer.sql_files)}개 · NDJSON {len(writer.vec_files)}개")
     print(f"   가이드: {output_dir / 'UPLOAD.md'}")
     if errors:
-        print(f"   ⚠️ 오류 {len(errors)}건 → {stats_path}")
+        print(f"   ⚠️ 일부 오류 {len(errors)}건 → {stats_path}")
 
 
 if __name__ == "__main__":
