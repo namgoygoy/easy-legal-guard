@@ -16,6 +16,16 @@ dist-ssr
 .nitro
 *.local
 
+# AI-Hub raw & processed data (large)
+data/**/*.zip
+data/processed/
+data/processed/upload/
+
+# Python
+scripts/.venv/
+__pycache__/
+*.pyc
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars

@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "description": "AI-Hub 계약 문서 카테고리 및 content_labels → 안심계약 AI 서비스 매핑",
+  "service_contract_types": [
+    {
+      "id": "dev",
+      "label": "IT/개발 용역",
+      "match": {
+        "detail_categories": ["개발계약서", "기타용역계약서"],
+        "sub_categories": ["용역"],
+        "main_categories": ["재산권사용_용역_컨설팅"],
+        "zip_prefixes": ["TL_재산권사용_용역_컨설팅_용역", "VL_재산권사용_용역_컨설팅_용역"]
+      }
+    },
+    {
+      "id": "design",
+      "label": "디자인 용역",
+      "match": {
+        "detail_categories": ["기타용역계약서", "컨설팅계약서"],
+        "sub_categories": ["용역", "컨설팅"],
+        "content_label_hints": ["용역의 대상", "납품", "검수"]
+      }
+    },
+    {
+      "id": "translation",
+      "label": "번역/콘텐츠",
+      "match": {
+        "detail_categories": ["저작권계약서", "특허_상표계약서"],
+        "sub_categories": ["지적재산권"],
+        "content_label_hints": ["저작권", "지적재산권", "콘텐츠"]
+      }
+    },
+    {
+      "id": "lease",
+      "label": "상가 임대차",
+      "match": {
+        "detail_categories": ["상업용부동산임대계약서", "권리설정계약서"],
+        "sub_categories": ["부동산임대", "부동산매매"],
+        "main_categories": ["부동산매매_임대차"],
+        "zip_prefixes": ["TL_부동산매매_임대차_부동산임대", "VL_부동산매매_임대차_부동산임대"]
+      }
+    },
+    {
+      "id": "franchise",
+      "label": "가맹/대리점",
+      "match": {
+        "detail_categories": ["프랜차이즈계약서", "대리점계약서"],
+        "sub_categories": ["프랜차이즈", "대리점"],
+        "main_categories": ["대리점_프랜차이즈"],
+        "zip_prefixes": ["TL_대리점_프랜차이즈", "VL_대리점_프랜차이즈"]
+      }
+    },
+    {
+      "id": "nda",
+      "label": "비밀유지(NDA)",
+      "match": {
+        "detail_categories": ["비밀유지계약서"],
+        "sub_categories": ["기업운영"],
+        "main_categories": ["경제_경영"],
+        "content_label_hints": ["비밀 유지", "비밀유지"],
+        "zip_prefixes": ["TL_경제_경영_기업운영", "VL_경제_경영_기업운영"]
+      }
+    },
+    {
+      "id": "etc",
+      "label": "기타 일반",
+      "match": {
+        "default": true
+      }
+    }
+  ],
+  "content_label_groups": {
+    "risk_high_hints": [
+      "손해배상의 예정",
+      "지적재산권",
+      "권리의 양도, 처분 금지",
+      "계약의 해제, 해지",
+      "면책",
+      "준거법"
+    ],
+    "risk_mid_hints": [
+      "계약의 내용",
+      "계약기간",
+      "용역 계약 기간",
+      "서비스 대금",
+      "계약금의 지급",
+      "대금 지급 방법",
+      "용역비용",
+      "지연배상금"
+    ],
+    "risk_safe_hints": [
+      "계약의 목적",
+      "신의성실",
+      "통지의무",
+      "관할법원",
+      "계약 체결 일자",
+      "계약서의 교부"
+    ],
+    "skip_labels": ["기타"]
+  },
+  "zip_category_parse": {
+    "pattern": "^(TL|VL)_(.+?)\\.zip$",
+    "note": "zip 파일명에서 main_sub_detail 추출 시 metadata.document_category 우선"
+  }
+}
