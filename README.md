@@ -396,3 +396,5 @@ python scripts/list_embedding_models.py
 6. [ ] (인프라) Cloudflare 대시보드에서 D1·Vectorize 데이터 확인
 
 질문·이슈는 GitHub Issues 또는 팀 채널로 공유해 주세요.
+
+
