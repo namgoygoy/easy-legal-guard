@@ -3,10 +3,12 @@
 프리랜서·소상공인을 위한 **AI 계약서 리스크 검토** 서비스 MVP입니다.  
 PDF 계약서를 업로드하면 독소 조항을 탐지하고, 표준약관에 기반한 **대안 문구**를 제안합니다.
 
-> 상세 요구사항: [`cursorrules/PRD.md`](cursorrules/PRD.md)  
-> 개발 체크리스트: [`cursorrules/ckecklist.md`](cursorrules/ckecklist.md)  
-> 코딩 규칙: [`cursorrules/cursor.md`](cursorrules/cursor.md)
- 
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/5e5b24b2-f896-45da-9716-b54c46837078" width="100%" max-width="800px" controls autorun loop muted>
+    주어진 브라우저가 비디오 태그를 지원하지 않습니다.
+  </video>
+</p>
+
 ---
 
 ## 목차
@@ -364,36 +366,6 @@ API는 `v1beta` 사용:
 ```bash
 python scripts/list_embedding_models.py
 ```
-
----
-
-## 진행 현황 & 다음 단계
-
-### 완료
-
-- [x] AI-Hub 전처리 및 MVP 2,500건 코퍼스
-- [x] D1 + Vectorize 업로드
-- [x] RAG 검색 + Context-Injection + Few-shot
-- [x] Gemini API 직접 연동 (`GEMINI_API_KEY`)
-- [x] 분석 UI (업로드, 리스크 대시보드, Side-by-Side)
-
-### 진행 예정
-
-- [ ] PDF 스캔본/암호화 PDF 예외 처리
-- [ ] 프로덕션 배포 URL·모니터링
-- [ ] 전체 13만 건 확장 (비용·Batch API 검토)
-- [ ] 프롬프트·RAG 품질 A/B 테스트
-
----
-
-## 팀 온보딩 체크리스트
-
-1. [ ] 저장소 clone 및 `npm install`
-2. [ ] `.env`에 `GEMINI_API_KEY` 설정
-3. [ ] `cursorrules/PRD.md` 읽기
-4. [ ] `npm run dev` → `/analyze`에서 샘플 PDF 테스트
-5. [ ] (데이터 담당) `scripts/` README 흐름으로 upload_small 재현
-6. [ ] (인프라) Cloudflare 대시보드에서 D1·Vectorize 데이터 확인
 
 질문·이슈는 GitHub Issues 또는 팀 채널로 공유해 주세요.
 
